@@ -21,11 +21,11 @@ Let's work through a complete example training pythia 2.8B on the Anthropic-HH d
 
 ### Step 1: Set up environment
 
-First, create a virtualenv and install the dependencies. Python 3.8+ is recommended.
+First, create a virtualenv and install the dependencies with `uv`. Python 3.11+ is recommended.
 ```sh
-python3 -m venv env
-source env/bin/activate
-pip install -r requirements.txt
+uv venv
+source .venv/bin/activate
+uv sync
 ```
 
 ### Step 2: Run SFT
