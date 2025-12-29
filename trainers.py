@@ -39,6 +39,7 @@ from collections import defaultdict
 import time
 import json
 import functools
+import hashlib
 from typing import Optional, Dict, List, Union, Tuple
 
 
@@ -169,6 +170,19 @@ class BasicTrainer(object):
         self.world_size = world_size
         self.config = config
         self.run_dir = run_dir
+        self.batch_margin_logging_enabled = True
+        self.batch_margin_logging_split = "both"
+        self.batch_margin_include_prompt_ids = True
+        self.batch_margin_include_prompts = False
+        self.batch_margin_dir = "/batch_margin"
+        self.batch_margin_path = None
+        batch_margin_logging = getattr(config, "batch_margin_logging", None)
+        if batch_margin_logging is not None:
+            self.batch_margin_logging_enabled = bool(getattr(batch_margin_logging, "enabled", True))
+            self.batch_margin_logging_split = str(getattr(batch_margin_logging, "split", "both")).lower()
+            self.batch_margin_include_prompt_ids = bool(getattr(batch_margin_logging, "include_prompt_ids", True))
+            self.batch_margin_include_prompts = bool(getattr(batch_margin_logging, "include_prompts", False))
+            self.batch_margin_dir = str(getattr(batch_margin_logging, "output_dir", self.batch_margin_dir))
 
         tokenizer_name_or_path = config.model.tokenizer_name_or_path or config.model.name_or_path
         rank0_print(f'Loading tokenizer {tokenizer_name_or_path}')
@@ -192,6 +206,12 @@ class BasicTrainer(object):
             self.gap_std = torch.zeros(1, device='cuda')
             self.loss_mean = torch.zeros(1, device='cuda')
             self.loss_std = torch.zeros(1, device='cuda')
+            if self.batch_margin_logging_enabled:
+                run_name = os.path.basename(self.run_dir.rstrip(os.sep))
+                safe_run_name = ''.join(c if (c.isalnum() or c in '-_.') else '_' for c in run_name)
+                self.batch_margin_path = os.path.join(self.batch_margin_dir, f'{safe_run_name}_margins.jsonl')
+                if self.rank == 0:
+                    os.makedirs(self.batch_margin_dir, exist_ok=True)
 
         self.train_iterator = get_batch_iterator(**data_iterator_kwargs, split='train', n_epochs=config.n_epochs, n_examples=config.n_examples, batch_size=config.batch_size, silent=rank != 0, cache_dir=get_local_dir(config.local_dirs))
         rank0_print(f'Loaded train data iterator')
@@ -261,6 +281,59 @@ class BasicTrainer(object):
                 self.gap_std /= self.world_size
                 self.loss_mean /= self.world_size
                 self.loss_std /= self.world_size
+
+    def _should_log_margins(self, split: str) -> bool:
+        """Determine whether to log batch margins for the given split."""
+        if not self.batch_margin_logging_enabled:
+            return False
+        split_key = (self.batch_margin_logging_split or "both").lower()
+        if split_key in {"both", "all"}:
+            return True
+        return split_key == split
+
+    def _prompt_id(self, prompt: str) -> str:
+        """Compute a short hash of the given prompt string for logging purposes."""
+        return hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:12]
+
+    def _log_batch_margins(
+        self,
+        margins: Optional[List[float]],
+        split: str,
+        batch_index: Optional[int] = None,
+        prompts: Optional[List[str]] = None,
+    ):
+        if self.rank != 0 or self.batch_margin_path is None or margins is None:
+            return
+        if not self._should_log_margins(split):
+            return
+        if prompts is not None and len(prompts) != len(margins):
+            prompt_count = len(prompts)
+            prompts = None
+        else:
+            prompt_count = None
+        prompt_ids = None
+        if prompts is not None and self.batch_margin_include_prompt_ids:
+            prompt_ids = [self._prompt_id(prompt) for prompt in prompts]
+        record = {
+            "format_version": 2,
+            "split": split,
+            "batch_index": batch_index,
+            "example_counter": self.example_counter,
+            "batch_counter": self.batch_counter,
+            "samples": [],
+        }
+        if prompt_count is not None:
+            record["prompt_count"] = prompt_count
+            record["margin_count"] = len(margins)
+        for idx, margin in enumerate(margins):
+            sample = {"index": idx, "margin": margin}
+            if prompt_ids is not None:
+                sample["prompt_id"] = prompt_ids[idx]
+            if prompts is not None and self.batch_margin_include_prompts:
+                sample["prompt"] = prompts[idx]
+            record["samples"].append(sample)
+        with open(self.batch_margin_path, "a") as f:
+            f.write(json.dumps(record) + "\n")
 
     def get_batch_metrics(self, batch: Dict[str, Union[List, torch.LongTensor]], loss_config: DictConfig, train=True):
         """Compute the SFT or DPO loss and other metrics for the given batch of inputs."""
@@ -370,10 +443,19 @@ class BasicTrainer(object):
                     if self.config.loss.name in {'dpo', 'ipo'}:
                         reference_text_table = wandb.Table(columns=["step", "prompt", "sample"])
 
-                for eval_batch in (tqdm.tqdm(self.eval_batches, desc='Computing eval metrics') if self.rank == 0 else self.eval_batches):
+                eval_iter = tqdm.tqdm(self.eval_batches, desc='Computing eval metrics') if self.rank == 0 else self.eval_batches
+                for eval_batch_idx, eval_batch in enumerate(eval_iter):
                     local_eval_batch = slice_and_move_batch_for_device(eval_batch, self.rank, self.world_size, self.rank)
                     with torch.no_grad():
                         _, eval_metrics = self.get_batch_metrics(local_eval_batch, self.config.loss, train=False)
+                    if self.config.loss.name == 'dpo':
+                        eval_prompts = eval_batch.get('prompt') if (self.batch_margin_include_prompt_ids or self.batch_margin_include_prompts) else None
+                        self._log_batch_margins(
+                            eval_metrics.get('rewards_eval/margins'),
+                            'eval',
+                            batch_index=eval_batch_idx,
+                            prompts=eval_prompts,
+                        )
 
                     for k, v in eval_metrics.items():
                         all_eval_metrics[k].extend(v)
@@ -427,6 +509,9 @@ class BasicTrainer(object):
 
             start_time = time.time()
             batch_metrics = defaultdict(list)
+            log_train_margins = self.config.loss.name == 'dpo' and self._should_log_margins('train')
+            need_train_prompts = log_train_margins and (self.batch_margin_include_prompt_ids or self.batch_margin_include_prompts)
+            batch_prompts = [] if need_train_prompts else None
             for microbatch_idx in range(self.config.gradient_accumulation_steps):
                 global_microbatch = slice_and_move_batch_for_device(batch, microbatch_idx, self.config.gradient_accumulation_steps, self.rank)
                 local_microbatch = slice_and_move_batch_for_device(global_microbatch, self.rank, self.world_size, self.rank)
@@ -435,6 +520,8 @@ class BasicTrainer(object):
 
                 for k, v in metrics.items():
                     batch_metrics[k].extend(v)
+                if need_train_prompts:
+                    batch_prompts.extend(global_microbatch.get('prompt', []))
 
             grad_norm = self.clip_gradient()
             self.optimizer.step()
@@ -448,6 +535,13 @@ class BasicTrainer(object):
 
             self.batch_counter += 1
             self.example_counter += self.config.batch_size
+            if self.config.loss.name == 'dpo':
+                self._log_batch_margins(
+                    batch_metrics.get('rewards_train/margins'),
+                    'train',
+                    batch_index=self.batch_counter,
+                    prompts=batch_prompts,
+                )
 
             if last_log is None or time.time() - last_log > self.config.minimum_log_interval_secs:
                 mean_train_metrics = {k: sum(v) / len(v) for k, v in batch_metrics.items()}

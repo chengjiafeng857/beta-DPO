@@ -6,6 +6,8 @@ set -e
 # Auto-shutdown logic
 POD_ID="${RUNPOD_POD_ID:-}"
 AUTO_SHUTDOWN=true
+RUN_SFT=true
+RUN_DPO=true
 cleanup() {
     if [[ -n "$POD_ID" && "$AUTO_SHUTDOWN" == "true" ]]; then
         echo "[cleanup] Training finished (or script exited). Stopping pod $POD_ID..."
@@ -38,6 +40,30 @@ LOCAL_DIRS="${LOCAL_DIRS:-/scr-ssd,/scr,.cache}"
 OUTPUT_DIR="${OUTPUT_DIR:-/mnt}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
 EVAL_EVERY="${EVAL_EVERY:-300}"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -noautoshut)
+            AUTO_SHUTDOWN=false
+            shift
+            ;;
+        -sft)
+            RUN_SFT=true
+            RUN_DPO=false
+            shift
+            ;;
+        -dpo)
+            RUN_SFT=false
+            RUN_DPO=true
+            shift
+            ;;
+        *)
+            echo "Error: Unknown flag '$1'"
+            AUTO_SHUTDOWN=false
+            exit 1
+            ;;
+    esac
+done
 
 # 1. Create venv using uv
 if [ ! -d ".venv" ]; then
@@ -122,22 +148,28 @@ echo "Using DPO n_examples=$DPO_N_EXAMPLES (fraction=$DATA_FRACTION)"
 GPUS=$(uv run python -c "import torch; print(torch.cuda.device_count())")
 echo "Detected $GPUS GPUs."
 
-echo "Running SFT..."
-SFT_ARGS=(
-  "model=$MODEL_NAME"
-  "datasets=[$DATASET_NAME]"
-  "loss=sft"
-  "exp_name=$SFT_EXP_NAME"
-  "trainer=$TRAINER"
-  "gradient_accumulation_steps=$GRADIENT_ACCUMULATION_STEPS"
-  "eval_every=$EVAL_EVERY"
-  "n_examples=$SFT_N_EXAMPLES"
-  "sample_during_eval=false"
-)
-uv run python -u train.py "${SFT_ARGS[@]}"
+if [[ "$RUN_SFT" == "true" ]]; then
+    echo "Running SFT..."
+    SFT_ARGS=(
+      "model=$MODEL_NAME"
+      "datasets=[$DATASET_NAME]"
+      "loss=sft"
+      "exp_name=$SFT_EXP_NAME"
+      "trainer=$TRAINER"
+      "gradient_accumulation_steps=$GRADIENT_ACCUMULATION_STEPS"
+      "eval_every=$EVAL_EVERY"
+      "n_examples=$SFT_N_EXAMPLES"
+      "sample_during_eval=false"
+    )
+    uv run python -u train.py "${SFT_ARGS[@]}"
+fi
 
-echo "Resolving SFT checkpoint..."
-SFT_CHECKPOINT=$(LOCAL_DIRS="$LOCAL_DIRS" SFT_EXP_NAME="$SFT_EXP_NAME" uv run python - <<'PY'
+if [[ "$RUN_SFT" == "true" || "$RUN_DPO" == "true" ]]; then
+    echo "Resolving SFT checkpoint..."
+    if [[ -n "$SFT_CHECKPOINT" ]]; then
+        echo "Using provided SFT checkpoint: $SFT_CHECKPOINT"
+    else
+        SFT_CHECKPOINT=$(LOCAL_DIRS="$LOCAL_DIRS" SFT_EXP_NAME="$SFT_EXP_NAME" uv run python - <<'PY'
 import glob
 import os
 from utils import get_local_dir
@@ -152,10 +184,13 @@ if not candidates:
 latest = max(candidates, key=os.path.getmtime)
 print(latest)
 PY
-)
-echo "Using SFT checkpoint: $SFT_CHECKPOINT"
+        )
+        echo "Using SFT checkpoint: $SFT_CHECKPOINT"
+    fi
+fi
 
-SFT_RUN_DIR=$(LOCAL_DIRS="$LOCAL_DIRS" SFT_EXP_NAME="$SFT_EXP_NAME" uv run python - <<'PY'
+if [[ "$RUN_SFT" == "true" ]]; then
+    SFT_RUN_DIR=$(LOCAL_DIRS="$LOCAL_DIRS" SFT_EXP_NAME="$SFT_EXP_NAME" uv run python - <<'PY'
 import glob
 import os
 from utils import get_local_dir
@@ -170,25 +205,33 @@ if not candidates:
 latest = max(candidates, key=os.path.getmtime)
 print(latest)
 PY
-)
-echo "Using SFT run dir: $SFT_RUN_DIR"
+    )
+    echo "Using SFT run dir: $SFT_RUN_DIR"
+fi
 
-echo "Running DPO in regular mode..."
-DPO_ARGS=(
-  "model=$MODEL_NAME"
-  "datasets=[$DATASET_NAME]"
-  "loss=dpo"
-  "loss.beta=$LOSS_BETA"
-  "loss.mode_loss=mean"
-  "exp_name=$DPO_EXP_NAME"
-  "trainer=$TRAINER"
-  "gradient_accumulation_steps=$GRADIENT_ACCUMULATION_STEPS"
-#   "eval_every=$EVAL_EVERY"
-  "n_examples=$DPO_N_EXAMPLES"
-  "sample_during_eval=false"
-  "model.archive=$SFT_CHECKPOINT"
-)
-uv run python -u train.py "${DPO_ARGS[@]}"
+if [[ "$RUN_DPO" == "true" ]]; then
+    if [[ -z "$SFT_CHECKPOINT" ]]; then
+        echo "Error: SFT_CHECKPOINT is required to run DPO."
+        AUTO_SHUTDOWN=false
+        exit 1
+    fi
+    echo "Running DPO in regular mode..."
+    DPO_ARGS=(
+      "model=$MODEL_NAME"
+      "datasets=[$DATASET_NAME]"
+      "loss=dpo"
+      "loss.beta=$LOSS_BETA"
+      "loss.mode_loss=mean"
+      "exp_name=$DPO_EXP_NAME"
+      "trainer=$TRAINER"
+      "gradient_accumulation_steps=$GRADIENT_ACCUMULATION_STEPS"
+      "eval_every=$EVAL_EVERY"
+      "n_examples=$DPO_N_EXAMPLES"
+      "sample_during_eval=false"
+      "model.archive=$SFT_CHECKPOINT"
+    )
+    uv run python -u train.py "${DPO_ARGS[@]}"
+fi
 
 echo "Training initialization sequence completed."
 
@@ -202,7 +245,8 @@ if [ ! -w "$OUTPUT_DIR" ]; then
     exit 1
 fi
 
-DPO_RUN_DIR=$(LOCAL_DIRS="$LOCAL_DIRS" DPO_EXP_NAME="$DPO_EXP_NAME" uv run python - <<'PY'
+if [[ "$RUN_DPO" == "true" ]]; then
+    DPO_RUN_DIR=$(LOCAL_DIRS="$LOCAL_DIRS" DPO_EXP_NAME="$DPO_EXP_NAME" uv run python - <<'PY'
 import glob
 import os
 from utils import get_local_dir
@@ -217,10 +261,15 @@ if not candidates:
 latest = max(candidates, key=os.path.getmtime)
 print(latest)
 PY
-)
-echo "Using DPO run dir: $DPO_RUN_DIR"
+    )
+    echo "Using DPO run dir: $DPO_RUN_DIR"
+fi
 
 echo "Copying final outputs to $OUTPUT_DIR..."
-cp -R "$SFT_RUN_DIR" "$OUTPUT_DIR"/
-cp -R "$DPO_RUN_DIR" "$OUTPUT_DIR"/
+if [[ "$RUN_SFT" == "true" ]]; then
+    cp -R "$SFT_RUN_DIR" "$OUTPUT_DIR"/
+fi
+if [[ "$RUN_DPO" == "true" ]]; then
+    cp -R "$DPO_RUN_DIR" "$OUTPUT_DIR"/
+fi
 echo "Copied run dirs to $OUTPUT_DIR"

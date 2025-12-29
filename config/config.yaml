@@ -91,6 +91,14 @@ eval_every: 300
 # prevent wandb from logging more than once per minimum_log_interval_secs
 minimum_log_interval_secs: 1.0
 
+# batch margin logging for DPO
+batch_margin_logging:
+  enabled: true
+  split: train # train | eval | both
+  output_dir: /batch_margin
+  include_prompt_ids: true
+  include_prompts: false
+
 
 defaults:
 - _self_
