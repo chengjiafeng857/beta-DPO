@@ -13,10 +13,10 @@ archive: null
 block_name: LlamaDecoderLayer
 
 # the dtype for the policy parameters/optimizer state
-policy_dtype: bfloat16
+policy_dtype: float16
 
 # the mixed precision dtype if using FSDP; defaults to the same as the policy
 fsdp_policy_mp: null
 
 # the dtype for the reference model (which is used for inference only)
-reference_dtype: bfloat16
+reference_dtype: float16
