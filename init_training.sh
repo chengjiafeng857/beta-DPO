@@ -29,7 +29,7 @@ echo "Starting training initialization..."
 # Training config (override with env vars if needed)
 MODEL_NAME="${MODEL_NAME:-llama32-1b}"
 DATASET_NAME="${DATASET_NAME:-hh}"
-DATA_FRACTION="${DATA_FRACTION:-0.5}"
+DATA_FRACTION="${DATA_FRACTION:-0.3}"
 SFT_DATA_FRACTION="${SFT_DATA_FRACTION:-$DATA_FRACTION}"
 LOSS_BETA="${LOSS_BETA:-0.1}"
 BASE_EXP_NAME="${BASE_EXP_NAME:-${EXP_NAME:-llama32_1b}}"
