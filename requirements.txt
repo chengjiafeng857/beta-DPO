@@ -1,10 +1,10 @@
 ipykernel==6.23.1
 numpy==1.24.3
-tokenizers==0.13.3
+tokenizers==0.20.0
 torch==2.0.1
 tqdm==4.65.0
-transformers==4.29.2
-peft==0.4.0
+transformers==4.45.2
+peft==0.13.2
 datasets==2.15.0
 beautifulsoup4==4.12.2
 wandb==0.15.3
