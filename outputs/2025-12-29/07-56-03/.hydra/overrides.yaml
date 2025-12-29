@@ -1,0 +1,7 @@
+- model=llama32-1b
+- datasets=[hh]
+- loss=sft
+- exp_name=llama32_1b_sft_runpod
+- trainer=BasicTrainer
+- n_examples=79989
+- sample_during_eval=false
