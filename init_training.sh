@@ -14,7 +14,13 @@ cleanup() {
         echo "[cleanup] Skipping auto-shutdown (POD_ID unset or AUTO_SHUTDOWN=false)."
     fi
 }
+on_interrupt() {
+    echo "[cleanup] Interrupt received; skipping auto-shutdown."
+    AUTO_SHUTDOWN=false
+    exit 130
+}
 trap cleanup EXIT
+trap on_interrupt INT
 
 echo "Starting training initialization..."
 
@@ -30,6 +36,8 @@ DPO_EXP_NAME="${DPO_EXP_NAME:-${BASE_EXP_NAME}_dpo_runpod}"
 TRAINER="${TRAINER:-BasicTrainer}"
 LOCAL_DIRS="${LOCAL_DIRS:-/scr-ssd,/scr,.cache}"
 OUTPUT_DIR="${OUTPUT_DIR:-/mnt}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
+EVAL_EVERY="${EVAL_EVERY:-300}"
 
 # 1. Create venv using uv
 if [ ! -d ".venv" ]; then
@@ -121,6 +129,8 @@ SFT_ARGS=(
   "loss=sft"
   "exp_name=$SFT_EXP_NAME"
   "trainer=$TRAINER"
+  "gradient_accumulation_steps=$GRADIENT_ACCUMULATION_STEPS"
+  "eval_every=$EVAL_EVERY"
   "n_examples=$SFT_N_EXAMPLES"
   "sample_during_eval=false"
 )
@@ -172,6 +182,8 @@ DPO_ARGS=(
   "loss.mode_loss=mean"
   "exp_name=$DPO_EXP_NAME"
   "trainer=$TRAINER"
+  "gradient_accumulation_steps=$GRADIENT_ACCUMULATION_STEPS"
+#   "eval_every=$EVAL_EVERY"
   "n_examples=$DPO_N_EXAMPLES"
   "sample_during_eval=false"
   "model.archive=$SFT_CHECKPOINT"
