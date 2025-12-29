@@ -48,9 +48,11 @@ def get_se(split, silent=False, cache_dir: str = None) -> Dict[str, Dict[str, Un
     
        We strip the HTML tags from the responses (except for <code> tags), and we add necessary newlines.
     """
-    print(f'Loading SE dataset ({split} split) from Huggingface...')
+    if not silent:
+        print(f'Loading SE dataset ({split} split) from Huggingface...')
     dataset = datasets.load_dataset('HuggingFaceH4/stack-exchange-preferences', cache_dir=cache_dir)['train']
-    print('done')
+    if not silent:
+        print('done')
 
     # shuffle the dataset and select 1% for test
     dataset = dataset.shuffle(seed=42)
@@ -88,9 +90,11 @@ def get_shp(split: str, silent: bool = False, cache_dir: str = None) -> Dict[str
        We filter preference pairs to only keep pairs where the score ratio is at least 2.
        For this dataset, the sft_target is the response with the highest score.
     """
-    print(f'Loading SHP dataset ({split} split) from Huggingface...')
+    if not silent:
+        print(f'Loading SHP dataset ({split} split) from Huggingface...')
     dataset = datasets.load_dataset('stanfordnlp/SHP', split=split, cache_dir=cache_dir)
-    print('done')
+    if not silent:
+        print('done')
 
     data = defaultdict(lambda: defaultdict(list))
     for row in tqdm.tqdm(dataset, desc='Processing SHP', disable=silent):
@@ -138,9 +142,11 @@ def get_hh(split: str, silent: bool = False, cache_dir: str = None) -> Dict[str,
        
        For this dataset, the sft_target is just the chosen response.
     """
-    print(f'Loading HH dataset ({split} split) from Huggingface...')
+    if not silent:
+        print(f'Loading HH dataset ({split} split) from Huggingface...')
     dataset = datasets.load_dataset('Anthropic/hh-rlhf', split=split, cache_dir=cache_dir)
-    print('done')
+    if not silent:
+        print('done')
 
     def split_prompt_and_responses(ex):
         prompt = extract_anthropic_prompt(ex['chosen'])

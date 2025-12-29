@@ -87,13 +87,16 @@ uv run wandb login "$WANDB_API_KEY"
 # 6. Compute dataset examples for SFT and DPO
 echo "Computing dataset sizes for '$DATASET_NAME'..."
 eval "$(DATASET_NAME="$DATASET_NAME" DATA_FRACTION="$DATA_FRACTION" SFT_DATA_FRACTION="$SFT_DATA_FRACTION" uv run python - <<'PY'
+import contextlib
 import os
+import sys
 from preference_datasets import get_dataset
 
 dataset_name = os.environ["DATASET_NAME"]
 fraction = float(os.environ["DATA_FRACTION"])
 sft_fraction = float(os.environ["SFT_DATA_FRACTION"])
-data = get_dataset(dataset_name, "train", silent=True)
+with contextlib.redirect_stdout(sys.stderr):
+    data = get_dataset(dataset_name, "train", silent=False)
 total_prompts = len(data)
 total_pairs = sum(len(v["pairs"]) for v in data.values())
 sft_examples = max(1, int(total_prompts * sft_fraction))
