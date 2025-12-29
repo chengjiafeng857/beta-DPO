@@ -29,6 +29,7 @@ SFT_EXP_NAME="${SFT_EXP_NAME:-${BASE_EXP_NAME}_sft_runpod}"
 DPO_EXP_NAME="${DPO_EXP_NAME:-${BASE_EXP_NAME}_dpo_runpod}"
 TRAINER="${TRAINER:-BasicTrainer}"
 LOCAL_DIRS="${LOCAL_DIRS:-/scr-ssd,/scr,.cache}"
+OUTPUT_DIR="${OUTPUT_DIR:-/mnt}"
 
 # 1. Create venv using uv
 if [ ! -d ".venv" ]; then
@@ -144,6 +145,24 @@ PY
 )
 echo "Using SFT checkpoint: $SFT_CHECKPOINT"
 
+SFT_RUN_DIR=$(LOCAL_DIRS="$LOCAL_DIRS" SFT_EXP_NAME="$SFT_EXP_NAME" uv run python - <<'PY'
+import glob
+import os
+from utils import get_local_dir
+
+exp_name = os.environ["SFT_EXP_NAME"]
+prefixes = os.environ["LOCAL_DIRS"].split(",")
+base_dir = get_local_dir(prefixes)
+pattern = os.path.join(base_dir, f"{exp_name}_*")
+candidates = [p for p in glob.glob(pattern) if os.path.isdir(p)]
+if not candidates:
+    raise SystemExit(f"No SFT run dir found for exp_name={exp_name} in {base_dir}")
+latest = max(candidates, key=os.path.getmtime)
+print(latest)
+PY
+)
+echo "Using SFT run dir: $SFT_RUN_DIR"
+
 echo "Running DPO in regular mode..."
 DPO_ARGS=(
   "model=$MODEL_NAME"
@@ -160,3 +179,36 @@ DPO_ARGS=(
 uv run python -u train.py "${DPO_ARGS[@]}"
 
 echo "Training initialization sequence completed."
+
+if [ ! -d "$OUTPUT_DIR" ]; then
+    echo "Creating output directory at $OUTPUT_DIR..."
+    mkdir -p "$OUTPUT_DIR"
+fi
+if [ ! -w "$OUTPUT_DIR" ]; then
+    echo "Error: $OUTPUT_DIR is not writable."
+    AUTO_SHUTDOWN=false
+    exit 1
+fi
+
+DPO_RUN_DIR=$(LOCAL_DIRS="$LOCAL_DIRS" DPO_EXP_NAME="$DPO_EXP_NAME" uv run python - <<'PY'
+import glob
+import os
+from utils import get_local_dir
+
+exp_name = os.environ["DPO_EXP_NAME"]
+prefixes = os.environ["LOCAL_DIRS"].split(",")
+base_dir = get_local_dir(prefixes)
+pattern = os.path.join(base_dir, f"{exp_name}_*")
+candidates = [p for p in glob.glob(pattern) if os.path.isdir(p)]
+if not candidates:
+    raise SystemExit(f"No DPO run dir found for exp_name={exp_name} in {base_dir}")
+latest = max(candidates, key=os.path.getmtime)
+print(latest)
+PY
+)
+echo "Using DPO run dir: $DPO_RUN_DIR"
+
+echo "Copying final outputs to $OUTPUT_DIR..."
+cp -R "$SFT_RUN_DIR" "$OUTPUT_DIR"/
+cp -R "$DPO_RUN_DIR" "$OUTPUT_DIR"/
+echo "Copied run dirs to $OUTPUT_DIR"
