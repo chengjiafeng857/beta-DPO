@@ -38,8 +38,6 @@ DPO_EXP_NAME="${DPO_EXP_NAME:-${BASE_EXP_NAME}_dpo_runpod}"
 TRAINER="${TRAINER:-BasicTrainer}"
 LOCAL_DIRS="${LOCAL_DIRS:-/scr-ssd,/scr,.cache}"
 OUTPUT_DIR="${OUTPUT_DIR:-/mnt}"
-GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
-EVAL_EVERY="${EVAL_EVERY:-300}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -156,8 +154,6 @@ if [[ "$RUN_SFT" == "true" ]]; then
       "loss=sft"
       "exp_name=$SFT_EXP_NAME"
       "trainer=$TRAINER"
-      "gradient_accumulation_steps=$GRADIENT_ACCUMULATION_STEPS"
-      "eval_every=$EVAL_EVERY"
       "n_examples=$SFT_N_EXAMPLES"
       "sample_during_eval=false"
     )
@@ -224,8 +220,6 @@ if [[ "$RUN_DPO" == "true" ]]; then
       "loss.mode_loss=mean"
       "exp_name=$DPO_EXP_NAME"
       "trainer=$TRAINER"
-      "gradient_accumulation_steps=$GRADIENT_ACCUMULATION_STEPS"
-      "eval_every=$EVAL_EVERY"
       "n_examples=$DPO_N_EXAMPLES"
       "sample_during_eval=false"
       "model.archive=$SFT_CHECKPOINT"
